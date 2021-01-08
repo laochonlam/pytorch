@@ -28,6 +28,7 @@ TEST(IValueTest, Basic) {
   IValue i(4);
   ASSERT_TRUE(i.isInt());
   ASSERT_EQ(i.toInt(), 4);
+
   IValue dlist(c10::List<double>({3.5}));
   ASSERT_TRUE(dlist.isDoubleList());
   ASSERT_TRUE(dlist.toDoubleVector() == std::vector<double>({3.5}));
