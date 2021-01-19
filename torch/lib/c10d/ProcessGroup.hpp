@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <unordered_map>
 #include <vector>
+#include <queue>
+#include <thread>
 
 #include <ATen/ATen.h>
 
@@ -159,6 +161,51 @@ class ProcessGroup : public torch::CustomClassHolder {
     std::function<void()> recordFunctionEndCallback_;
   };
 
+  class CollectiveWork : public torch::CustomClassHolder {
+   public:
+    CollectiveWork();
+    CollectiveWork(
+        OpType opType,
+        std::vector<at::Tensor>* data,
+        c10::intrusive_ptr<ProcessGroup::Work> work,
+        uint32_t priority);
+
+    c10::intrusive_ptr<ProcessGroup::Work> work_;
+    OpType operation_;
+    std::vector<at::Tensor>* data_;
+    uint32_t priority_;
+
+    int getPriority() const {
+      return priority_;
+    }
+
+    OpType getOperation() const {
+      return operation_;
+    }
+
+    std::vector<at::Tensor>* getData() {
+      return data_;
+    }
+
+    c10::intrusive_ptr<ProcessGroup::Work> getWork() {
+      return work_;
+    }
+
+    friend bool operator<(
+        const CollectiveWork& lhs,
+        const CollectiveWork& rhs) {
+      return lhs.getPriority() < rhs.getPriority();
+    }
+
+    friend bool operator>(
+        const CollectiveWork& lhs,
+        const CollectiveWork& rhs) {
+      return lhs.getPriority() > rhs.getPriority();
+    }
+  };
+
+  std::map<c10::intrusive_ptr<c10d::ProcessGroup::Work>, c10::intrusive_ptr<c10d::ProcessGroup::Work>> fake_work_mapping;
+
   explicit ProcessGroup(int rank, int size);
   virtual ~ProcessGroup();
 
@@ -168,6 +215,20 @@ class ProcessGroup : public torch::CustomClassHolder {
 
   int getSize() const {
     return size_;
+  }
+
+  c10::intrusive_ptr<c10d::ProcessGroup::Work> 
+      wait_collective_queue(c10::intrusive_ptr<c10d::ProcessGroup::Work> work);
+
+  c10::intrusive_ptr<c10d::ProcessGroup::Work> enqueueTask(
+      OpType operation,
+      std::vector<at::Tensor>& data,
+      c10::intrusive_ptr<c10d::ProcessGroup::Work> work);
+
+  bool dequeueTask();
+
+  c10::intrusive_ptr<ProcessGroup::CollectiveWork> getFrontTask() {
+    return front_task_;
   }
 
   virtual c10::intrusive_ptr<ProcessGroup::Work> broadcast(
@@ -261,6 +322,13 @@ class ProcessGroup : public torch::CustomClassHolder {
  protected:
   const int rank_;
   const int size_;
+
+  std::priority_queue<c10::intrusive_ptr<ProcessGroup::CollectiveWork>> collective_queue_;
+  c10::intrusive_ptr<ProcessGroup::CollectiveWork> front_task_;
+  std::thread* task_listener_;
 };
+
+void TaskListenLoop(ProcessGroup& group_);
+bool TaskListenLoopOnce(ProcessGroup& group_);
 
 } // namespace c10d
