@@ -16,21 +16,21 @@ bool TaskListenLoopOnce(ProcessGroup& group_) {
   if (group_.dequeueTask()) {
     auto task = group_.getFrontTask();
     auto op = task->getOperation();
+    auto opts = task->getOpts();
     auto data = task->getData();
     auto work = task->getWork();
-    // printf("workptr: %p\n", work.get());
     switch(op) {
       case OpType::BROADCAST:
       {
         printf("[listener GET] BROADCAST\n");
-        auto new_work = group_.broadcast(*data);
-        group_.fake_work_mapping[work] = new_work;
+        work->real_work_ = group_.broadcast(*data, opts.broadcastOpts);
+        // group_.fake_work_mapping[(void*)work.get()] = new_work;
       }
       case OpType::ALLREDUCE:
       {
-        printf("[listener GET] ALLREDUCE\n");
-        auto new_work = group_.allreduce(*data);
-        group_.fake_work_mapping[work] = new_work;
+        printf("[listener GET] ALLREDUCE workptr: %p\n", work.get());
+        work->real_work_ = group_._allreduce(*data, opts.allreduceOpts);
+        // group_.fake_work_mapping[(void*)work.get()] = new_work;
       }
       // case OpType::ALLREDUCE_COALESCED:
       //   return "ALLREDUCE_COALESCED";
@@ -168,6 +168,18 @@ std::vector<at::Tensor> ProcessGroup::Work::result() {
 void ProcessGroup::Work::synchronize() {}
 
 bool ProcessGroup::Work::wait(std::chrono::milliseconds timeout) {
+  while (1) {
+    if (this->real_work_) {
+      // Lam: This work is already overwrited.
+      this->real_work_->wait();
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return true;
+}
+
+bool ProcessGroup::Work::_wait(std::chrono::milliseconds timeout) {
   std::unique_lock<std::mutex> lock(mutex_);
   if (timeout == kNoTimeout) {
     // This waits without a timeout.
@@ -223,33 +235,37 @@ void ProcessGroup::Work::finishAndThrow(std::exception_ptr exception) {
 }
 
 ProcessGroup::CollectiveWork::CollectiveWork(
-    OpType operation,
+    c10d::CollectiveOptions opts,
+    c10d::OpType operation,
     std::vector<at::Tensor>* data,
     c10::intrusive_ptr<c10d::ProcessGroup::Work> work,
     uint32_t priority)
-    : operation_(operation), data_(data), work_(work), priority_(priority) {};
+    : opts_(opts),
+      operation_(operation),
+      data_(data),
+      work_(work),
+      priority_(priority){};
 
-c10::intrusive_ptr<c10d::ProcessGroup::Work> ProcessGroup::
-    wait_collective_queue(c10::intrusive_ptr<c10d::ProcessGroup::Work> work) {
-      while (1) {
-        auto iter = fake_work_mapping.find(work);
-        if (iter != fake_work_mapping.end())
-          return iter->second;
-        std::this_thread::sleep_for(std::chrono::milliseconds(10));
-      }
-    }
+// c10::intrusive_ptr<c10d::ProcessGroup::Work> ProcessGroup::
+//     wait_collective_queue(c10::intrusive_ptr<c10d::ProcessGroup::Work> work) {
+//       while (1) {
+//         auto iter = fake_work_mapping.find(work);
+//         if (iter != fake_work_mapping.end())
+//           return iter->second;
+//         std::this_thread::sleep_for(std::chrono::milliseconds(10));
+//       }
+//     }
 
-c10::intrusive_ptr<c10d::ProcessGroup::Work> ProcessGroup::enqueueTask(
-    OpType operation,
-    std::vector<at::Tensor>& data,
-    c10::intrusive_ptr<c10d::ProcessGroup::Work> work) {
-      uint32_t priority = 0;
-      auto work_new = c10::make_intrusive<c10d::ProcessGroup::Work>();
-      collective_queue_.emplace(c10::make_intrusive<ProcessGroup::CollectiveWork>(operation, &data, work_new, priority));
-      // Lam: This work is a fake work, will substitute later.
-      // return c10::make_intrusive<c10d::ProcessGroup::Work>();
-      return work_new;
-    }
+// c10::intrusive_ptr<c10d::ProcessGroup::Work> ProcessGroup::enqueueTask(
+//     OpType operation,
+//     std::vector<at::Tensor>& data,
+//     c10::intrusive_ptr<c10d::ProcessGroup::Work> work) {
+//       uint32_t priority = 0;
+//       auto work_new = c10::make_intrusive<c10d::ProcessGroup::Work>();
+//       // collective_queue_.emplace(c10::make_intrusive<ProcessGroup::CollectiveWork>(operation, &data, work_new, priority));
+//       // Lam: This work is a fake work, will substitute later.
+//       return work_new;
+//     }
 
 bool ProcessGroup::dequeueTask() {
   if (!collective_queue_.empty()) {

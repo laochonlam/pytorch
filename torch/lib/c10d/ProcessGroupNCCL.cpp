@@ -1223,11 +1223,12 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::pointToPoint(
       [](std::vector<at::cuda::CUDAStream>&) {});
 }
 
-c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::allreduce(
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::_allreduce(
     std::vector<at::Tensor>& tensors,
     const AllreduceOptions& opts) {
+  printf("NCCL allreduce called.\n");
   check_gpu_tensors(tensors);
-
+  
   return collective(
       tensors,
       tensors,
@@ -1248,6 +1249,23 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::allreduce(
       "nccl:all_reduce");
 }
 
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::allreduce(
+    std::vector<at::Tensor>& tensors,
+    const AllreduceOptions& opts) {
+  uint32_t priority = 0;
+  
+  c10d::CollectiveOptions collectiveOpts{.allreduceOpts = opts};
+  auto work_fake = c10::make_intrusive<c10d::ProcessGroup::Work>();
+  
+  auto real_work = c10::make_intrusive<ProcessGroup::CollectiveWork>(
+      collectiveOpts, OpType::ALLREDUCE, &tensors, work_fake, priority);
+  collective_queue_.push(real_work);
+  // collective_queue_.emplace(collectiveOpts, OpType::ALLREDUCE, &tensors, work_fake, priority); 
+
+  //  Lam: This work is a fake work, will substitute later.
+  return work_fake;
+}
+
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::allreduce_coalesced(
     std::vector<at::Tensor>& tensors,
     const AllreduceCoalescedOptions& opts) {
@@ -1259,7 +1277,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::broadcast(
     std::vector<at::Tensor>& tensors,
     const BroadcastOptions& opts) {
   check_gpu_tensors(tensors);
-
+  printf("NCCL broadcast called.\n");
   return collective(
       tensors,
       tensors,
@@ -1284,7 +1302,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::reduce(
     std::vector<at::Tensor>& tensors,
     const ReduceOptions& opts) {
   check_gpu_tensors(tensors);
-
+  printf("NCCL reduce called.\n");
   return collective(
       tensors,
       tensors,
@@ -1312,7 +1330,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::allgather(
     std::vector<at::Tensor>& inputTensors,
     const AllgatherOptions& opts) {
   check_gpu_tensors(inputTensors);
-
+  printf("NCCL allgather called.\n");
   auto outputFlattened =
       flatten_for_scatter_gather(outputTensors, inputTensors, size_);
   check_gpu_tensors(outputFlattened);
@@ -1365,7 +1383,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::reduce_scatter(
     std::vector<std::vector<at::Tensor>>& inputTensors,
     const ReduceScatterOptions& opts) {
   check_gpu_tensors(outputTensors);
-
+  printf("NCCL reduce_scatter called.\n");
   auto inputFlattened =
       flatten_for_scatter_gather(inputTensors, outputTensors, size_);
   check_gpu_tensors(inputFlattened);
@@ -1443,9 +1461,12 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::barrier(
 
   // All reduce to achieve the barrier
   auto work = allreduce(barrierTensors);
-
+  
   // Work will take over barrierTensors
-  auto ncclWork = dynamic_cast<ProcessGroupNCCL::WorkNCCL*>(work.get());
+  while (!work->real_work_) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  auto ncclWork = dynamic_cast<ProcessGroupNCCL::WorkNCCL*>(work->real_work_.get());
   TORCH_CHECK(ncclWork);
   ncclWork->barrierTensors_ = std::move(barrierTensors);
 
@@ -1459,6 +1480,7 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupNCCL::alltoall_base(
     std::vector<int64_t>& outputSplitSizes,
     std::vector<int64_t>& inputSplitSizes,
     const AllToAllOptions& /* unused */) {
+  printf("NCCL alltoall_base called.\n");
   check_gpu_single_tensor(outputTensor);
   check_gpu_single_tensor(inputTensor);
   if (outputSplitSizes.size() == 0 && inputSplitSizes.size() == 0) {

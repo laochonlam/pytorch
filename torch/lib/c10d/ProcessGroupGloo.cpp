@@ -1301,6 +1301,12 @@ class AsyncSparseAllreduceCUDAWork : public AsyncSparseAllreduceWork {
 
 } // namespace
 
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupGloo::_allreduce(
+    std::vector<at::Tensor>& inputs,
+    const AllreduceOptions& opts) {
+      return c10::make_intrusive<c10d::ProcessGroup::Work>();
+    }
+
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupGloo::allreduce(
     std::vector<at::Tensor>& inputs,
     const AllreduceOptions& opts) {

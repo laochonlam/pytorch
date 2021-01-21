@@ -657,8 +657,8 @@ void Reducer::mark_variable_ready(VariableIndex index) {
         // allreduce respect the current stream, so will be sequenced correctly.
         local_used_maps_dev_[i].copy_(local_used_maps_[i], true);
       }
-      local_used_work_ = process_group_->enqueueTask(OpType::ALLREDUCE, local_used_maps_dev_, local_used_work_);
-      // local_used_work_ = process_group_->allreduce(local_used_maps_dev_);
+      // local_used_work_ = process_group_->enqueueTask(OpType::ALLREDUCE, local_used_maps_dev_, local_used_work_);
+      local_used_work_ = process_group_->allreduce(local_used_maps_dev_);
     }
 
     // The autograd engine uses the default stream when running callbacks, so we
@@ -712,8 +712,8 @@ void Reducer::mark_bucket_ready(size_t bucket_index) {
     // TODO(@sinannasir): merge `work` and `future_work`. Related to GH Issue
     // #41266.
     if (comm_hook_ == nullptr) {
-      bucket.work = process_group_->enqueueTask(OpType::ALLREDUCE, *tensors, bucket.work);
-      // bucket.work = process_group_->allreduce(tensors);
+      // bucket.work = process_group_->enqueueTask(OpType::ALLREDUCE, *tensors, bucket.work);
+      bucket.work = process_group_->allreduce(*tensors);
     } else {
       GradBucket grad_bucket(
           next_bucket_,
@@ -1191,14 +1191,14 @@ void Reducer::finalize_backward() {
           bucket.work,
           "Expected bucket.work not to be null. "
           "This may indicate that allreduce hooks were not properly installed.");
-      bucket.work = process_group_->wait_collective_queue(bucket.work);
+      // bucket.work = process_group_->wait_collective_queue(bucket.work);
       bucket.work->wait();
     } else {
       TORCH_INTERNAL_ASSERT(
           bucket.future_work,
           "Expected bucket.future_work not to be null. "
           "This may indicate that communication hook was not properly installed.");
-      bucket.work = process_group_->wait_collective_queue(bucket.work);
+      // bucket.work = process_group_->wait_collective_queue(bucket.work);
       bucket.future_work->wait();
 
       auto future_result =
@@ -1236,7 +1236,7 @@ void Reducer::finalize_backward() {
     // interfere, write to the device-side memory and clobber the content of
     // local_unused_maps_dev_.
     if (!local_used_maps_reduced_) {
-      local_used_work_ = process_group_->wait_collective_queue(local_used_work_);
+      // local_used_work_ = process_group_->wait_collective_queue(local_used_work_);
       local_used_work_->wait();
     }
     local_used_maps_reduced_ = false;

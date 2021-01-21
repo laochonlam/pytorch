@@ -66,4 +66,17 @@ struct BarrierOptions {
   std::chrono::milliseconds timeout = kUnsetTimeout;
 };
 
+union CollectiveOptions {
+  BroadcastOptions broadcastOpts;
+  AllreduceOptions allreduceOpts;
+  AllreduceCoalescedOptions allreduceCoalescedOpts;
+  ReduceOptions reduceOpts;
+  AllgatherOptions allgatherOpts;
+  GatherOptions gatherOpts;
+  ScatterOptions scatterOpts;
+  ReduceScatterOptions reduceScatterOpts;
+  AllToAllOptions alltoallOpts;
+  // BarrierOptions barrierOpts;
+};
+
 } // namespace c10d

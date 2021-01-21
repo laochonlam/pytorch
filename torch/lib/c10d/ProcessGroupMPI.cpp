@@ -339,6 +339,12 @@ c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupMPI::broadcast(
   return enqueue(std::move(entry));
 }
 
+c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupMPI::_allreduce(
+    std::vector<at::Tensor>& tensors,
+    const AllreduceOptions& opts) {
+      c10::make_intrusive<c10d::ProcessGroup::Work>();
+    }
+
 c10::intrusive_ptr<ProcessGroup::Work> ProcessGroupMPI::allreduce(
     std::vector<at::Tensor>& tensors,
     const AllreduceOptions& opts) {

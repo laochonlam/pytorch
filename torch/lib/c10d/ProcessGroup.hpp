@@ -76,8 +76,12 @@ class ProcessGroup : public torch::CustomClassHolder {
   // replaced by ivalue::Future.
   // Python binding for this class might change, please do not assume
   // this will be bound using pybind.
+
   class Work : public torch::CustomClassHolder {
    public:
+    
+    c10::intrusive_ptr<c10d::ProcessGroup::Work> real_work_;
+
     Work(int rank = -1, OpType opType = OpType::UNKNOWN, const char* profilingTitle = nullptr);
 
     virtual ~Work();
@@ -127,6 +131,7 @@ class ProcessGroup : public torch::CustomClassHolder {
     //   return success;
     //
     virtual bool wait(std::chrono::milliseconds timeout = kNoTimeout);
+    virtual bool _wait(std::chrono::milliseconds timeout = kNoTimeout);
 
     virtual void abort();
 
@@ -165,12 +170,14 @@ class ProcessGroup : public torch::CustomClassHolder {
    public:
     CollectiveWork();
     CollectiveWork(
+        c10d::CollectiveOptions opts,
         OpType opType,
         std::vector<at::Tensor>* data,
         c10::intrusive_ptr<ProcessGroup::Work> work,
         uint32_t priority);
 
     c10::intrusive_ptr<ProcessGroup::Work> work_;
+    CollectiveOptions opts_;
     OpType operation_;
     std::vector<at::Tensor>* data_;
     uint32_t priority_;
@@ -181,6 +188,10 @@ class ProcessGroup : public torch::CustomClassHolder {
 
     OpType getOperation() const {
       return operation_;
+    }
+
+    CollectiveOptions getOpts() const {
+      return opts_;
     }
 
     std::vector<at::Tensor>* getData() {
@@ -204,8 +215,6 @@ class ProcessGroup : public torch::CustomClassHolder {
     }
   };
 
-  std::map<c10::intrusive_ptr<c10d::ProcessGroup::Work>, c10::intrusive_ptr<c10d::ProcessGroup::Work>> fake_work_mapping;
-
   explicit ProcessGroup(int rank, int size);
   virtual ~ProcessGroup();
 
@@ -217,8 +226,8 @@ class ProcessGroup : public torch::CustomClassHolder {
     return size_;
   }
 
-  c10::intrusive_ptr<c10d::ProcessGroup::Work> 
-      wait_collective_queue(c10::intrusive_ptr<c10d::ProcessGroup::Work> work);
+  // c10::intrusive_ptr<c10d::ProcessGroup::Work> 
+  //     wait_collective_queue(c10::intrusive_ptr<c10d::ProcessGroup::Work> work);
 
   c10::intrusive_ptr<c10d::ProcessGroup::Work> enqueueTask(
       OpType operation,
@@ -236,6 +245,10 @@ class ProcessGroup : public torch::CustomClassHolder {
       const BroadcastOptions& opts = BroadcastOptions()) = 0;
 
   virtual c10::intrusive_ptr<ProcessGroup::Work> allreduce(
+      std::vector<at::Tensor>& data,
+      const AllreduceOptions& opts = AllreduceOptions()) = 0;
+
+  virtual c10::intrusive_ptr<ProcessGroup::Work> _allreduce(
       std::vector<at::Tensor>& data,
       const AllreduceOptions& opts = AllreduceOptions()) = 0;
 
@@ -327,7 +340,7 @@ class ProcessGroup : public torch::CustomClassHolder {
   c10::intrusive_ptr<ProcessGroup::CollectiveWork> front_task_;
   std::thread* task_listener_;
 };
-
+ 
 void TaskListenLoop(ProcessGroup& group_);
 bool TaskListenLoopOnce(ProcessGroup& group_);
 
