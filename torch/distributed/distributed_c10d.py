@@ -50,6 +50,52 @@ from .c10d_logger import _exception_logger, _time_logger
 from .constants import default_pg_nccl_timeout, default_pg_timeout
 from .rendezvous import register_rendezvous_handler, rendezvous  # noqa: F401
 
+import inspect
+# [lam] Lam C10d Configs
+LAM_LOG_LEVEL = logging.INFO
+# LAM_LOG_LEVEL = logging.DEBUG
+CALLER_STACK_LEVEL_PRINT = 3
+
+logging.basicConfig(level=LAM_LOG_LEVEL, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+lam_logger = logging.getLogger("Lam Logger")
+lam_logger.setLevel(LAM_LOG_LEVEL)  # Explicitly set the logger level
+
+# Add a StreamHandler to ensure logs are displayed
+if not lam_logger.handlers:
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(LAM_LOG_LEVEL)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    console_handler.setFormatter(formatter)
+    lam_logger.addHandler(console_handler)
+    lam_logger.propagate = False  # Prevent propagation to root logger
+
+# Lam: a debugger for the checking the call stack of each nccl collecctive call.
+call_counter = 0
+def log_caller(func):
+    def wrapper(*args, **kwargs):
+
+        # Get the caller's frame information
+        caller_frames = inspect.stack()[1:CALLER_STACK_LEVEL_PRINT]
+        group = kwargs.get("group", None)
+        for frame in caller_frames:
+            caller_name = frame.function
+            caller_filename = frame.filename
+            caller_lineno = frame.lineno
+        
+            # Log the caller information
+            # lam_logger.debug(f"Function '{func.__name__}' called by '{caller_name}' in '{caller_filename}:{caller_lineno}' group: {group}")
+        
+        # Call the original function
+        # This is for debugging purpose, can control which call we want to perform 
+        # in the trace generation mode.
+        global call_counter
+        call_counter += 1
+        # lam_logger.debug(f"[Lam] Call counter: {call_counter}")
+        # if call_counter == 120:
+        #     time.sleep(1000000)
+        return func(*args, **kwargs)
+    return wrapper
+
 
 __all__ = [
     "Backend",
@@ -124,6 +170,7 @@ __all__ = [
     "reduce_scatter_tensor",
     "get_node_local_rank",
     "split_group",
+    "set_enable_dump",
 ]
 
 _MPI_AVAILABLE = True
@@ -1359,6 +1406,7 @@ def _set_pg_timeout(timeout: timedelta, group: Optional[ProcessGroup] = None) ->
 
 @_exception_logger
 @_time_logger
+@log_caller
 def init_process_group(
     backend: Optional[str] = None,
     init_method: Optional[str] = None,
@@ -2029,6 +2077,7 @@ def get_world_size(group: Optional[ProcessGroup] = None) -> int:
     return _get_group_size(group)
 
 
+@log_caller
 def isend(
     tensor: torch.Tensor, dst: int, group: Optional[ProcessGroup] = None, tag: int = 0
 ) -> Optional[Work]:
@@ -2071,6 +2120,7 @@ def isend(
     return pg.send([tensor], dst, tag)
 
 
+@log_caller
 def irecv(
     tensor: torch.Tensor,
     src: Optional[int] = None,
@@ -2120,6 +2170,7 @@ def irecv(
 
 
 @_exception_logger
+@log_caller
 def send(
     tensor: torch.Tensor, dst: int, group: Optional[ProcessGroup] = None, tag: int = 0
 ) -> None:
@@ -2161,6 +2212,7 @@ def send(
 
 
 @_exception_logger
+@log_caller
 def recv(
     tensor: torch.Tensor,
     src: Optional[int] = None,
@@ -2331,6 +2383,7 @@ def _coalescing_manager(
         work.wait()  # type: ignore[possibly-undefined]
 
 
+@log_caller
 def batch_isend_irecv(p2p_op_list):
     """
     Send or Receive a batch of tensors asynchronously and return a list of requests.
@@ -2391,6 +2444,7 @@ def batch_isend_irecv(p2p_op_list):
 
 
 @_exception_logger
+@log_caller
 def broadcast(tensor, src, group=None, async_op=False):
     """
     Broadcasts the tensor to the whole group.
@@ -2435,7 +2489,11 @@ def broadcast(tensor, src, group=None, async_op=False):
 
 
 @_exception_logger
+@log_caller
 def all_reduce(tensor, op=ReduceOp.SUM, group=None, async_op=False):
+
+    # lam_logger.debug(f"[distributed_c10d] _all_reduce is called - input tensor shape: {tensor.shape}, dtype: {tensor.dtype}, op: {op}, async_op: {async_op}, group: {group}, tensor: {tensor}")
+
     """
     Reduces the tensor data across all machines in a way that all get the final result.
 
@@ -2522,6 +2580,7 @@ def all_reduce(tensor, op=ReduceOp.SUM, group=None, async_op=False):
     "https://pytorch.org/docs/main/distributed.html#collective-functions",
     category=FutureWarning,
 )
+@log_caller
 def all_reduce_coalesced(tensors, op=ReduceOp.SUM, group=None, async_op=False):
     """
     WARNING: at this time individual shape checking is not implemented across nodes.
@@ -2581,6 +2640,7 @@ def all_reduce_coalesced(tensors, op=ReduceOp.SUM, group=None, async_op=False):
 
 
 @_exception_logger
+@log_caller
 def reduce(tensor, dst, op=ReduceOp.SUM, group=None, async_op=False):
     """
     Reduces the tensor data across all machines.
@@ -2626,6 +2686,7 @@ def reduce(tensor, dst, op=ReduceOp.SUM, group=None, async_op=False):
         work.wait()
 
 
+@log_caller
 def _object_to_tensor(obj, device, group):
     f = io.BytesIO()
     _pickler(f).dump(obj)
@@ -2645,6 +2706,7 @@ def _object_to_tensor(obj, device, group):
     return byte_tensor, local_size
 
 
+@log_caller
 def _tensor_to_object(tensor, tensor_size, group):
     if get_debug_level() == DebugLevel.DETAIL and is_nccl_available():
         backend = get_backend(group)
@@ -2659,6 +2721,7 @@ def _tensor_to_object(tensor, tensor_size, group):
 
 
 @_exception_logger
+@log_caller
 def all_gather_object(object_list, obj, group=None):
     """
     Gathers picklable objects from the whole group into a list.
@@ -2750,6 +2813,7 @@ def all_gather_object(object_list, obj, group=None):
 
 
 @_exception_logger
+@log_caller
 def gather_object(obj, object_gather_list=None, dst=0, group=None):
     """
     Gathers picklable objects from the whole group in a single process.
@@ -2861,6 +2925,7 @@ def gather_object(obj, object_gather_list=None, dst=0, group=None):
 
 
 @_exception_logger
+@log_caller
 def send_object_list(object_list, dst, group=None, device=None):
     """
     Sends picklable objects in ``object_list`` synchronously.
@@ -2955,6 +3020,7 @@ def send_object_list(object_list, dst, group=None, device=None):
 
 
 @_exception_logger
+@log_caller
 def recv_object_list(object_list, src=None, group=None, device=None):
     """
     Receives picklable objects in ``object_list`` synchronously.
@@ -3050,6 +3116,7 @@ def recv_object_list(object_list, src=None, group=None, device=None):
 
 
 @_exception_logger
+@log_caller
 def broadcast_object_list(object_list, src=0, group=None, device=None):
     """
     Broadcasts picklable objects in ``object_list`` to the whole group.
@@ -3164,6 +3231,7 @@ def broadcast_object_list(object_list, src=0, group=None, device=None):
 
 
 @_exception_logger
+@log_caller
 def scatter_object_list(
     scatter_object_output_list, scatter_object_input_list, src=0, group=None
 ):
@@ -3281,6 +3349,7 @@ def scatter_object_list(
 
 
 @_exception_logger
+@log_caller
 def all_gather(tensor_list, tensor, group=None, async_op=False):
     """
     Gathers tensors from the whole group in a list.
@@ -3356,7 +3425,10 @@ def all_gather(tensor_list, tensor, group=None, async_op=False):
 
 
 @_exception_logger
+@log_caller
 def all_gather_into_tensor(output_tensor, input_tensor, group=None, async_op=False):
+
+    # lam_logger.debug(f"[distributed_c10d] all_gather_into_tensor is called - input tensor shape: {input_tensor.shape}, dtype: {input_tensor.dtype}, async_op: {async_op}, group: {group}, input_tensor: {input_tensor}, output_tensor: {output_tensor}")
     """
     Gather tensors from all ranks and put them in a single output tensor.
 
@@ -3455,6 +3527,7 @@ def all_gather_into_tensor(output_tensor, input_tensor, group=None, async_op=Fal
     "Please use `torch.distributed.all_gather_into_tensor` instead.",
     category=FutureWarning,
 )
+@log_caller
 def _all_gather_base(output_tensor, input_tensor, group=None, async_op=False):
     """
     Single tensor all gather. Gathers a single tensor from all ranks, and puts them in a single output tensor.
@@ -3486,6 +3559,7 @@ def _all_gather_base(output_tensor, input_tensor, group=None, async_op=False):
     "https://pytorch.org/docs/main/distributed.html#collective-functions",
     category=FutureWarning,
 )
+@log_caller
 def all_gather_coalesced(
     output_tensor_lists, input_tensor_list, group=None, async_op=False
 ):
@@ -3564,6 +3638,7 @@ def all_gather_coalesced(
         work.wait()
 
 
+@log_caller
 def _validate_output_list_for_rank(my_rank, dst, gather_list):
     if dst == my_rank:
         if not gather_list:
@@ -3578,6 +3653,7 @@ def _validate_output_list_for_rank(my_rank, dst, gather_list):
 
 
 @_exception_logger
+@log_caller
 def gather(tensor, gather_list=None, dst=0, group=None, async_op=False):
     """
     Gathers a list of tensors in a single process.
@@ -3653,6 +3729,7 @@ def gather(tensor, gather_list=None, dst=0, group=None, async_op=False):
 
 
 @_exception_logger
+@log_caller
 def scatter(tensor, scatter_list=None, src=0, group=None, async_op=False):
     """
     Scatters a list of tensors to all processes in a group.
@@ -3753,6 +3830,7 @@ def scatter(tensor, scatter_list=None, src=0, group=None, async_op=False):
 
 
 @_exception_logger
+@log_caller
 def reduce_scatter(output, input_list, op=ReduceOp.SUM, group=None, async_op=False):
     """
     Reduces, then scatters a list of tensors to all processes in a group.
@@ -3792,6 +3870,7 @@ def reduce_scatter(output, input_list, op=ReduceOp.SUM, group=None, async_op=Fal
 
 
 @_exception_logger
+@log_caller
 def reduce_scatter_tensor(output, input, op=ReduceOp.SUM, group=None, async_op=False):
     """
     Reduces, then scatters a tensor to all ranks in a group.
@@ -3882,6 +3961,7 @@ def reduce_scatter_tensor(output, input, op=ReduceOp.SUM, group=None, async_op=F
     "Please use `torch.distributed.reduce_scatter_tensor` instead.",
     category=FutureWarning,
 )
+@log_caller
 def _reduce_scatter_base(output, input, op=ReduceOp.SUM, group=None, async_op=False):
     """
     Reduces, then scatters a flattened tensor to all processes in a group.
@@ -3904,8 +3984,14 @@ def _reduce_scatter_base(output, input, op=ReduceOp.SUM, group=None, async_op=Fa
     """
     return reduce_scatter_tensor(output, input, op, group, async_op)
 
+ENABLE_DUMP = False
+# Lam: Enabling the tensor dump from the applicatin.
+def set_enable_dump(enable_dump: bool):
+    global ENABLE_DUMP
+    ENABLE_DUMP = enable_dump
 
 @_exception_logger
+@log_caller
 def all_to_all_single(
     output,
     input,
@@ -3914,6 +4000,71 @@ def all_to_all_single(
     group=None,
     async_op=False,
 ):
+
+    # lam_logger.debug(f"[distributed_c10d] all_to_all_single is called - input output shape: {output.shape}, input shape: {input.shape}, dtype: {input.dtype}, output_split_sizes: {output_split_sizes}, input_split_sizes: {input_split_sizes}, group: {group}, async_op: {async_op}, size_in_bytes: {input.numel() * input.element_size()}")
+    
+    if ENABLE_DUMP:
+        # [LAM] Dump all_to_all_single data for replay
+        rank = int(os.environ.get("RANK", "0"))
+        world_size = int(os.environ.get("WORLD_SIZE", "1"))
+        
+        # Create dump directory for this rank if it doesn't exist
+        rank_dump_dir = f"/workspace/compression_project/megatron_logs/all_to_all_dumps/rank_{rank}"
+        os.makedirs(rank_dump_dir, exist_ok=True)
+        
+        # Generate unique call ID based on call counter
+        global call_counter
+        call_id = call_counter
+        
+        # Save input tensor
+        input_file = f"{rank_dump_dir}/call_{call_id}_input.pt"
+        torch.save({
+            'tensor': input.cpu().clone(),
+            'shape': input.shape,
+            'dtype': input.dtype,
+            'device': str(input.device)
+        }, input_file)
+        
+        # Save output tensor template (before operation)
+        output_template_file = f"{rank_dump_dir}/call_{call_id}_output_template.pt"
+        torch.save({
+            'tensor': output.cpu().clone(),
+            'shape': output.shape,
+            'dtype': output.dtype,
+            'device': str(output.device)
+        }, output_template_file)
+        
+        # Save parameters
+        params_file = f"{rank_dump_dir}/call_{call_id}_params.json"
+        import json
+        
+        # Convert numpy arrays to lists for JSON serialization
+        def to_list(arr):
+            if arr is None:
+                return []
+            if hasattr(arr, 'tolist'):  # numpy array
+                return arr.tolist()
+            elif isinstance(arr, (list, tuple)):
+                return list(arr)
+            else:
+                return arr
+        
+        params = {
+            'rank': rank,
+            'world_size': world_size,
+            'call_id': call_id,
+            'output_split_sizes': to_list(output_split_sizes),
+            'input_split_sizes': to_list(input_split_sizes),
+            'async_op': async_op,
+            'group_id': id(group) if group is not None else None,
+            'input_shape': list(input.shape),
+            'output_shape': list(output.shape),
+            'dtype': str(input.dtype)
+        }
+        with open(params_file, 'w') as f:
+            json.dump(params, f, indent=2)
+        
+        # lam_logger.debug(f"[LAM] Rank {rank} dumped all_to_all_single call {call_id} data to {rank_dump_dir}", flu 
     """
     Split input tensor and then scatter the split list to all processes in a group.
 
@@ -4022,17 +4173,46 @@ def all_to_all_single(
     input_split_sizes = [] if input_split_sizes is None else input_split_sizes
 
     group = group or _get_default_group()
+
+    os.environ['NCCL_ALLTOALL_CUSTOM'] = '1'
+    # os.environ['NCCL_PROTO'] = 'Simple'
+    # os.environ['NCCL_MIN_NCHANNELS'] = '16'
+    # os.environ['NCCL_MAX_NCHANNELS'] = '16'
     work = group.alltoall_base(
         output, input, output_split_sizes, input_split_sizes, opts
     )
+    del os.environ['NCCL_ALLTOALL_CUSTOM']
+    # del os.environ['NCCL_PROTO']
+    # del os.environ['NCCL_COMM_CUSTOM']
+    # del os.environ['NCCL_MAX_NCHANNELS']
 
     if async_op:
+        # Assert that async_op should not be True for dumping
+        assert not ENABLE_DUMP, "Cannot dump data when async_op=True, dumping requires synchronous operation"
         return work
     else:
         work.wait()
+        
+        if ENABLE_DUMP:
+            # [LAM] Save output tensor after operation completes (only after work.wait())
+            # Note: global call_counter already declared in the input dump section above
+            rank = int(os.environ.get("RANK", "0"))
+            rank_dump_dir = f"/workspace/compression_project/megatron_logs/all_to_all_dumps/rank_{rank}"
+            call_id = call_counter
+            
+            output_file = f"{rank_dump_dir}/call_{call_id}_output.pt"
+            torch.save({
+                'tensor': output.cpu().clone(),
+                'shape': output.shape,
+                'dtype': output.dtype,
+                'device': str(output.device)
+            }, output_file)
+            
+            # lam_logger.debug(f"[LAM] Rank {rank} dumped all_to_all_single call {call_id} output to {rank_dump_dir}")
 
 
 @_exception_logger
+@log_caller
 def all_to_all(output_tensor_list, input_tensor_list, group=None, async_op=False):
     """
     Scatters list of input tensors to all processes in a group and return gathered list of tensors in output list.
@@ -4149,6 +4329,7 @@ def all_to_all(output_tensor_list, input_tensor_list, group=None, async_op=False
 
 
 @_exception_logger
+@log_caller
 def barrier(group=GroupMember.WORLD, async_op=False, device_ids=None):
     """
     Synchronize all processes.
@@ -4193,6 +4374,7 @@ def barrier(group=GroupMember.WORLD, async_op=False, device_ids=None):
         work.wait()
 
 
+@log_caller
 def monitored_barrier(group=GroupMember.WORLD, timeout=None, wait_all_ranks=False):
     """
     Synchronize processes similar to ``torch.distributed.barrier``, but consider a configurable timeout.
@@ -4519,6 +4701,7 @@ def split_group(
 
 
 @_time_logger
+@log_caller
 def new_group(
     ranks=None,
     timeout=None,
